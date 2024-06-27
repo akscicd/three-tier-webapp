@@ -1,0 +1,58 @@
+steps:
+- id: 'tf init'
+  name: 'hashicorp/terraform:1.0.0'
+  entrypoint: 'sh'
+  args: 
+  - '-c'
+  - | 
+    terraform init
+  dir: infra
+
+- id: 'tf apply'
+  name: 'hashicorp/terraform:1.0.0'
+  args: 
+  - apply
+  - -auto-approve
+  dir: infra
+
+- id: 'configure sql instance'
+  name: 'gcr.io/cloud-builders/gcloud-slim'
+  entrypoint: 'sh'
+  args: 
+  - '-c'
+  - |
+    export DATABASE_INSTANCE=$(gcloud sql instances list --format='value(name)' --filter='labels.tier:3')
+    export SERVICE_ACCOUNT=$(gcloud sql instances describe $$DATABASE_INSTANCE --format='value(serviceAccountEmailAddress)')
+    gsutil mb gs://$PROJECT_ID-sqldata
+    gsutil cp schema.sql gs://$PROJECT_ID-sqldata
+    gsutil iam ch serviceAccount:$$SERVICE_ACCOUNT:objectAdmin gs://$PROJECT_ID-sqldata
+    gcloud sql import sql $$DATABASE_INSTANCE gs://$PROJECT_ID-sqldata/schema.sql -q
+    gsutil rm gs://$PROJECT_ID-sqldata/schema.sql
+    gsutil rb gs://$PROJECT_ID-sqldata
+  dir: sql
+
+
+
+
+- id: 'build docker images of frontend and backend and push them to private repo'
+  name: 'gcr.io/cloud-builders/docker'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    cd /root/
+    git clone https://github.com/akscicd/three-tier-webapp-infra.git
+    cd /root/three-tier-webapp-infra/backend-docker-image/
+    docker build --tag europe-west1-docker.pkg.dev/dynamic-parity-426014-s3/akscicdprivate/backend:latest .
+    docker push europe-west1-docker.pkg.dev/dynamic-parity-426014-s3/akscicdprivate/backend:latest
+    cd /root/three-tier-webapp-infra/frontend-docker-image
+    docker build --tag europe-west1-docker.pkg.dev/dynamic-parity-426014-s3/akscicdprivate/frontend:latest .
+    docker push europe-west1-docker.pkg.dev/dynamic-parity-426014-s3/akscicdprivate/frontend:latest
+    
+options:
+  env:
+    - TF_VAR_project_id=$PROJECT_ID
+  logging: CLOUD_LOGGING_ONLY
+
+
+timeout: 3600s
